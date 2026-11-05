@@ -194,3 +194,73 @@ class RegistryDiagnosticTests(unittest.TestCase):
                             os.kill(pid, signal.SIGKILL)
                         except ProcessLookupError:
                             pass
+
+    def test_interrupt_exit_codes_abort_remaining_comparison_probes(self):
+        args = ["--compare", "registry.example/fixture/private:test",
+                "registry.example/fixture/public:test"]
+        for code in (130, 143):
+            for resolver in ("docker", "sbx"):
+                with self.subTest(code=code, resolver=resolver):
+                    result, calls, _ = self.fixture(
+                        args, docker_status=code if resolver == "docker" else 0,
+                        sbx_status=code if resolver == "sbx" else 0,
+                    )
+                    self.assertEqual(result.returncode, code)
+                    self.assertEqual(len(calls), 1 if resolver == "docker" else 2)
+                    self.assertIn(f"private {resolver} INTERRUPTED", result.stdout)
+                    self.assertNotIn("public ", result.stdout)
+                    self.assertNotIn("checks finished", result.stdout)
+
+    def test_real_wrapper_interrupt_aborts_shell_without_later_probes(self):
+        for signum, target in ((signal.SIGINT, "wrapper"), (signal.SIGTERM, "wrapper"),
+                               (signal.SIGINT, "diagnostic-group")):
+            with self.subTest(signal=signum, target=target), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                (path / "python3").symlink_to(sys.executable)
+                log, pids = path / "calls", path / "pids"
+                for cli in ("docker", "sbx"):
+                    binary = path / cli
+                    binary.write_text(
+                        '#!/bin/bash\nprintf "%s\\n" "' + cli + '" >> "$CALL_LOG"\n'
+                        + ('case "${!#}" in *public*) exit 0;; esac\n'
+                           'trap "" TERM\nprintf "%s %s\\n" "$PPID" "$$" > "$PIDS"\n'
+                           'while :; do :; done\n' if cli == "docker" else 'exit 0\n')
+                    )
+                    binary.chmod(0o700)
+                process = subprocess.Popen(
+                    ["/bin/bash", str(SCRIPT), "--compare",
+                     "registry.example/fixture/private:test", "registry.example/fixture/public:test"],
+                    env={"PATH": directory, "CALL_LOG": str(log), "PIDS": str(pids),
+                         "REGISTRY_PROBE_TIMEOUT_SECONDS": "60"},
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
+                )
+                wrapper_pid = child_pid = None
+                try:
+                    for _ in range(200):
+                        if pids.exists() and len(pids.read_text().split()) == 2:
+                            wrapper_pid, child_pid = map(int, pids.read_text().split())
+                            break
+                        time.sleep(0.01)
+                    self.assertIsNotNone(wrapper_pid, "resolver wrapper did not start")
+                    if target == "diagnostic-group":
+                        os.killpg(process.pid, signum)
+                    else:
+                        os.kill(wrapper_pid, signum)
+                    stdout, stderr = process.communicate(timeout=4)
+                    self.assertEqual(process.returncode, 128 + signum)
+                    self.assertEqual(log.read_text().splitlines(), ["docker"])
+                    self.assertEqual(stdout, "private docker INTERRUPTED\n")
+                    self.assertEqual(stderr, "")
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(child_pid, 0)
+                finally:
+                    # Clean test-owned processes even when the regression fails.
+                    for pid in (child_pid, wrapper_pid):
+                        if pid is not None:
+                            try:
+                                os.kill(pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                    if process.poll() is None:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    process.communicate()

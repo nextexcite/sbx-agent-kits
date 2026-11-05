@@ -43,6 +43,7 @@ probe() {
   python3 "$wrapper" "$seconds" "$@" >/dev/null 2>&1 || code=$?
   case "$code" in
     0) printf '%s %s PASS\n' "$role" "$resolver" ;;
+    130|143) printf '%s %s INTERRUPTED\n' "$role" "$resolver"; exit "$code" ;;
     124) printf '%s %s TIMEOUT\n' "$role" "$resolver"; status=1 ;;
     *) printf '%s %s FAIL exit=%s\n' "$role" "$resolver" "$code"; status=1 ;;
   esac
