@@ -13,7 +13,7 @@ network policy and credential injection require the corresponding runtime.
 
 This reference includes templates, a shared toolchain installer, context staging
 and offline structural tests. It includes no deployment, registry publishing,
-account configuration, cloud resource management or credential workflows.
+account configuration, cloud resource management or credential-provisioning workflows.
 Neither the tests nor GitHub Actions create a sandbox or publish an image.
 Agent permission bypass is not enabled by these examples.
 
@@ -58,3 +58,23 @@ Kit conformance, runtime or cloud acceptance test.
 
 Specifications: [Kit v3](https://github.com/docker/sandbox-kit-spec) and
 [Kit v2](https://github.com/docker/sbx-kits-contrib/blob/main/spec/SPEC-v2.md).
+
+## Registry diagnostics and Cloud acceptance
+
+The optional `scripts/diagnose-kit-registry.sh` accepts an explicit image
+reference, or `--compare PRIVATE_REFERENCE PUBLIC_CONTROL`. It checks existing
+Docker and sbx resolver access without login or credential changes. Run it
+only on an authorized, already authenticated client with Python 3, Docker
+Buildx and sbx installed. It prints status labels rather than references or
+raw CLI output. Each probe defaults to 15 seconds plus one-second cleanup
+grace. Public CI tests it using fake CLIs and never contacts a registry.
+Process-group cleanup covers ordinary child processes, not children that
+explicitly escape into a different session. Registry success is not Kit
+conformance or Cloud execution evidence.
+
+See [custom toolchain and durability acceptance](docs/TOOLCHAIN-E2E.md) for
+initialization, time-to-ready and stop/resume checks using the custom Kit.
+The final template must contain the requested tools; an official default
+shell image is only a possible control. Provider selection and credentials
+are each user's responsibility. No actual Amp/Pi model task is needed to
+validate toolchain availability and durable workspace state.
