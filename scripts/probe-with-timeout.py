@@ -32,9 +32,15 @@ def main():
         return 125
     process = None
     code = 125
+    cancellation = None
+    cleaning = False
 
     def interrupted(signum, _frame):
-        raise Interrupted(signum)
+        nonlocal cancellation
+        if cancellation is None:
+            cancellation = signum
+        if not cleaning:
+            raise Interrupted(signum)
 
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
@@ -56,14 +62,14 @@ def main():
     finally:
         # Cleanup must not depend on the launcher remaining alive. Also remove
         # background helpers left by a launcher that returned normally.
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        # Record late/repeated cancellation without aborting termination.
+        cleaning = True
         if process is not None:
             if signal_group(process.pid, signal.SIGTERM):
                 time.sleep(1)
                 signal_group(process.pid, signal.SIGKILL)
             process.wait()
-    return code
+    return 128 + cancellation if cancellation is not None else code
 
 
 if __name__ == "__main__":

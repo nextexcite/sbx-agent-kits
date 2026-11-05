@@ -264,3 +264,67 @@ class RegistryDiagnosticTests(unittest.TestCase):
                     if process.poll() is None:
                         os.killpg(process.pid, signal.SIGKILL)
                     process.communicate()
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "uses /proc to distinguish zombies")
+    def test_cancellation_during_cleanup_stops_remaining_probes(self):
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(signal=signum), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                (path / "python3").symlink_to(sys.executable)
+                log, ready, cleanup, pid_file, wrapper_file = [path / n for n in ("calls", "ready", "cleanup", "pid", "wrapper")]
+                helper = path / "helper.py"
+                helper.write_text(
+                    'import os, signal, time\n'
+                    'def term(*_):\n'
+                    '    open(os.environ["CLEANUP"], "w").write("started")\n'
+                    'signal.signal(signal.SIGTERM, term)\n'
+                    'open(os.environ["PID_FILE"], "w").write(str(os.getpid()))\n'
+                    'open(os.environ["READY"], "w").write("ready")\n'
+                    'while True: time.sleep(1)\n'
+                )
+                for cli in ("docker", "sbx"):
+                    binary = path / cli
+                    binary.write_text(
+                        '#!/bin/bash\nprintf "%s\\n" "' + cli + '" >> "$CALL_LOG"\n'
+                        + ('printf "%s\\n" "$PPID" > "$WRAPPER_FILE"\npython3 "$HELPER" &\nwhile [[ ! -f "$READY" ]]; do :; done\n'
+                           if cli == "docker" else '') + 'exit 0\n'
+                    )
+                    binary.chmod(0o700)
+                process = subprocess.Popen(
+                    ["/bin/bash", str(SCRIPT), "--compare", "registry.example/private:test",
+                     "registry.example/public:test"],
+                    env={"PATH": directory, "CALL_LOG": str(log), "HELPER": str(helper),
+                         "READY": str(ready), "CLEANUP": str(cleanup), "PID_FILE": str(pid_file),
+                         "WRAPPER_FILE": str(wrapper_file)},
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
+                )
+                helper_pid = None
+                try:
+                    deadline = time.monotonic() + 3
+                    while not cleanup.exists() and time.monotonic() < deadline:
+                        time.sleep(0.005)
+                    self.assertTrue(cleanup.exists(), "cleanup phase did not start")
+                    helper_pid = int(pid_file.read_text())
+                    if signum == signal.SIGINT:
+                        os.killpg(process.pid, signum)
+                    else:
+                        # The wrapper shares the shell group, but SIGTERM directly
+                        # to the shell would terminate it before it can print status.
+                        os.kill(int(wrapper_file.read_text()), signum)
+                    stdout, stderr = process.communicate(timeout=4)
+                    self.assertEqual(process.returncode, 128 + signum)
+                    self.assertEqual(log.read_text().splitlines(), ["docker"])
+                    self.assertEqual(stdout, "private docker INTERRUPTED\n")
+                    self.assertEqual(stderr, "")
+                    stat = Path(f"/proc/{helper_pid}/stat")
+                    if stat.exists():
+                        self.assertEqual(stat.read_text().split(") ", 1)[1][0], "Z")
+                finally:
+                    if process.poll() is None:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    process.communicate()
+                    if helper_pid is not None:
+                        try:
+                            os.kill(helper_pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
