@@ -1,0 +1,40 @@
+# Generated as dist/v2/spec.yaml by scripts/render-v2.sh.
+# Never insert tokens or passwords. IMAGE_REFERENCE is one OCI runtime image.
+schemaVersion: "2"
+kind: sandbox
+name: amp
+version: "0.1.0"
+displayName: Amp Factory v2
+description: Example Amp sandbox with a common software-factory toolchain.
+sandbox:
+  image: "@IMAGE_REFERENCE@"
+  entrypoint:
+    - amp
+environment:
+  variables:
+    IS_SANDBOX: "1"
+agentInstructions:
+  filename: AGENTS.md
+  content: |
+    Sandbox for trusted repository work. Toolchains: mise, uv, fnm Node LTS,
+    pnpm, bun, deno, pi, agent-browser, skills, gh. Never print credentials.
+    Use the project AGENTS.md and repo toolchain manifests when present.
+permissions:
+  network:
+    allow:
+      - ampcode.com:443
+      - '*.ampcode.com:443'
+      - github.com:443
+      - api.github.com:443
+      - '*.githubusercontent.com:443'
+      - registry.npmjs.org:443
+      - pypi.org:443
+      - files.pythonhosted.org:443
+credentials:
+  - service: amp
+    apiKey:
+      name: AMP_API_KEY
+      inject:
+        - domain: ampcode.com
+          header: Authorization
+          format: "Bearer %s"
